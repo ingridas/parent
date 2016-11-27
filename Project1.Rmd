@@ -1,0 +1,115 @@
+---
+title: "Self Movement Prediction"
+author: "Ingrida"
+date: "27 November 2016"
+output: html_document
+---
+```{r}
+library(caret)
+library(ggplot2)
+library(survival)
+library(randomForest)
+library(rpart) 
+library(rpart.plot)
+library(gbm)
+library(plyr)
+library(splines)
+library(parallel)
+```
+# Executive Summary
+The goal of this project is to predict the manner in which 6 participants did the exercise.The data were colected using accelerometers on the belt, forearm, arm, and dumbell. The participant were asked to perform barbell lifts correctly and incorrectly in 5 different ways:
+
+- exactly according to the specification (Class A)
+- throwing the elbows to the front (Class B)
+- lifting the dumbbell only halfway (Class C)
+- lowering the dumbbell only halfway (Class D)
+- throwing the hips to the front (Class E)
+
+The data for this project come from http://groupware.les.inf.puc-rio.br/har. First, data are collected, cleaned and preprocessed. Then the training data are splitted into training (70%) and validation (30%) sets where the former is used to fit prediction model and the latter to validate the fitted model. In this study, we use three different methods, namely GBM, LDA and RF. The model with the highest accuracy is selcted as our final model to make prediction for 20 samples.
+
+# Data preparation
+While reading the data, cells with empty, NA or #DIV/0! are replaced with NA values. Then columns with missing values are removed.
+```{r}
+# Read training and testing data
+trainD <- read.csv("~/datasciencecoursera/Practical Machine Learning/pml-training.csv", head=TRUE, sep=",", na.strings=c("NA","#DIV/0!","")) 
+testD <- read.csv("~/datasciencecoursera/Practical Machine Learning/pml-testing.csv", head=TRUE, sep=",", na.strings=c("NA","#DIV/0!","")) 
+# Check dimensions for training and testing data
+dim(trainD)
+dim(testD)
+# Delete columns with all missing values
+trainD<-trainD[,colSums(is.na(trainD)) == 0]
+testD <-testD[,colSums(is.na(testD)) == 0]
+# Check if we removed columnss with missing data values
+sum(is.na(trainD) == TRUE)
+sum(is.na(testD) == TRUE)
+```
+Next, we identify variables whose variance is nearly 0 using function nearZeroVar and remove them from our data as well.
+```{r}
+nzColumns <- nearZeroVar(trainD, saveMetrics = TRUE)
+tidy_train <- trainD[, nzColumns$nzv==FALSE]
+tidy_train$classe <- as.factor(tidy_train$classe)
+tidy_test <- testD[, nzColumns$nzv==FALSE]
+```
+The last step in cleaning data is to remove variables which are irrelevant to our prediction. These are X, timestamp, user_name and problem_id. 
+```{r}
+id1 <- grepl("X|timestamp|user_name", names(tidy_train))
+tidy_train <- tidy_train[, which(id1 ==FALSE)]
+id2 <- grepl("X|timestamp|user_name|problem_id", names(tidy_test))
+tidy_test <- tidy_test[, which(id2 ==FALSE)]
+```
+# Model fitting
+## Partitioning of a dataset
+We split the tidy training data into training set of 70% of all data which is used for fitting the prediction model and test set of 30% of all data which is used for validating the fitted model.
+```{r}
+set.seed(12345)
+partT <- createDataPartition (tidy_train$classe, p=0.7, list=FALSE)
+train <- tidy_train[partT,]
+test <- tidy_train[-partT,]
+```
+Our aim of the model is to predict the variable “classe” which contains 5 levels: A, B, C, D and E.
+```{r}
+table(train$classe)
+```
+##Training different models
+We train three different models: Gradient Boosted Machine (GBM), Linear Discriminant Analysis (LDA) and Random Forest (RF).
+```{r}
+control <- trainControl(method="cv", number=10)
+#training
+model1 <- train(classe ~ ., data = train, method = "gbm",trControl=control, verbose=FALSE)
+model2 <- train(classe ~ ., data = train, method = "lda",trControl=control)
+model3 <- randomForest(classe ~., data=train, method="class",trControl=control)
+# prediction
+pred1 <- predict(model1, test)
+pred2 <- predict(model2, test)
+pred3 <- predict(model3, test)
+# GBM model
+confusionMatrix(pred1, test$classe)
+# LDA model
+confusionMatrix(pred2, test$classe)
+# RF model
+confusionMatrix(pred3, test$classe)
+```
+##Selecting prediction model
+Accuracy and expected out-of-sample error are important while selecting the final model. As expected, RF performed better than GBM and LDA. Accuracy of RF model is 0.995 (95% CI: (0.993, 0.997)) compared to 0.983 (95% CI : (0.9788, 0.9857)) GBM and 0.707 (95% CI : (0.6952, 0.7187)) LDA. The expected out-of-sample error is calculated as 1 - accuracy for predictions made against the cross-validation set and for RF model it is very small, i.e. equal to 0.0046.
+
+The following figure demonstrates first 25 most important predictors. As you can observe the num_window is the most important.
+```{r, echo=TRUE}
+imp <- varImp(model3)
+impN<-rownames(imp)
+order<-data.frame(varnames=impN,imp)
+order<-arrange(order,desc(Overall))[1:25,]
+ggplot(order, aes(x=reorder(impN[1:25],desc(Overall))[1:25],y=Overall,fill=varnames)) + geom_bar(stat="identity") + theme(legend.position="none")+
+  xlab("Feature Name")+guides(fill=FALSE)+
+  ylab("Importance Value")+ggtitle("25 Most important variables")+
+  theme(axis.text.x=element_text(angle=75,hjust=1)) + 
+  theme(plot.title = element_text(size=14, face="bold"))
+```
+
+# Predicting on test data
+Test data set consists of 20 samples. With an accuracy above 99% on our validation data, we can expect that very few, or none, of the test samples will be missclassified.
+```{r}
+predictfinal <- predict(model3, tidy_test, type="class")
+predictfinal
+```
+# Conclusions
+It is not a surprise that RF model was the most accurate among GBM and LDA and provided the best results. Random forests are able to handle a large number of variables including categorical ones, especially when the interactions between variables are unknown. The obtained prediction model is accurate (higher than 99% accuracy) to predict the manner in which the exercise was performed.
